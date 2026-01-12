@@ -7,7 +7,7 @@ url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
-st.set_page_config(page_title="Magazyn Supabase", layout="centered")
+st.set_page_config(page_title="Magazyn Supabase", layout="wide")
 st.title("📦 Zarządzanie Produktami i Kategoriami")
 
 # --- SEKCJA 1: DODAWANIE KATEGORII ---
@@ -19,16 +19,19 @@ with st.form("form_kategorie", clear_on_submit=True):
 
     if submit_kat:
         if kat_nazwa:
-            data = {"nazwa": kat_nazwa, "opis": kat_opis}
-            supabase.table("kategorie").insert(data).execute()
-            st.success(f"Dodano kategorię: {kat_nazwa}")
+            try:
+                data = {"nazwa": kat_nazwa, "opis": kat_opis}
+                supabase.table("kategorie").insert(data).execute()
+                st.success(f"Dodano kategorię: {kat_nazwa}")
+            except Exception as e:
+                st.error(f"Błąd: {e}")
         else:
             st.error("Nazwa kategorii jest wymagana!")
 
 # --- SEKCJA 2: DODAWANIE PRODUKTU ---
 st.header("2. Dodaj Nowy Produkt")
 
-# Pobranie aktualnych kategorii do listy rozwijanej
+# Pobranie aktualnych kategorii
 categories_query = supabase.table("kategorie").select("id, nazwa").execute()
 categories_list = categories_query.data
 cat_options = {c['nazwa']: c['id'] for c in categories_list}
@@ -47,28 +50,32 @@ with st.form("form_produkty", clear_on_submit=True):
 
     if submit_prod:
         if prod_nazwa and cat_options:
-            product_data = {
-                "nazwa": prod_nazwa,
-                "liczba": prod_liczba,
-                "cena": prod_cena,
-                "kategoria_id": cat_options[selected_cat_name]
-            }
-            supabase.table("produkty").insert(product_data).execute()
-            st.success(f"Dodano produkt: {prod_nazwa}")
+            try:
+                product_data = {
+                    "nazwa": prod_nazwa,
+                    "liczba": prod_liczba,
+                    "cena": prod_cena,
+                    "kategoria_id": cat_options[selected_cat_name]
+                }
+                supabase.table("produkty").insert(product_data).execute()
+                st.success(f"Dodano produkt: {prod_nazwa}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Błąd: {e}")
         else:
             st.error("Wypełnij wymagane pola!")
 
-# --- SEKCJA 3: PODGLĄD DANYCH I USUWANIE ---
 st.divider()
+
+# --- SEKCJA 3: PODGLĄD I EDYCJA ---
 st.header("3. Twoje Produkty")
 
-# Pobieramy dane (ważne: pobieramy też 'id', aby móc usuwać)
+# Pobieramy dane
 res = supabase.table("produkty").select("id, nazwa, liczba, cena, kategorie(nazwa)").execute()
 products_data = res.data
 
 if products_data:
-    # Wyświetlenie tabeli z danymi
-    # Przekształcamy dane do formatu czytelnego dla tabeli (rozbijamy zagnieżdżoną kategorię)
+    # Wyświetlenie tabeli
     display_data = []
     for p in products_data:
         display_data.append({
@@ -78,25 +85,44 @@ if products_data:
             "Cena": p['cena'],
             "Kategoria": p['kategorie']['nazwa'] if p['kategorie'] else "Brak"
         })
-    
     st.dataframe(display_data, use_container_width=True)
 
-    # Formularz usuwania
-    st.subheader("Usuń przedmiot")
-    col1, col2 = st.columns([3, 1])
+    # --- PODSEKCJA: ZMIANA ILOŚCI ---
+    st.subheader("🔄 Szybka zmiana ilości")
+    col_upd1, col_upd2, col_upd3 = st.columns([2, 1, 1])
     
-    with col1:
-        # Tworzymy opcje do selectboxa: "Nazwa (ID: x)"
+    # Mapowanie do selectboxa
+    product_map = {f"{p['nazwa']} (Obecnie: {p['liczba']})": p for p in products_data}
+    
+    with col_upd1:
+        selected_prod_text = st.selectbox("Wybierz produkt do edycji", options=list(product_map.keys()), key="update_select")
+        selected_prod = product_map[selected_prod_text]
+        
+    with col_upd2:
+        new_quantity = st.number_input("Nowa ilość", min_value=0, value=int(selected_prod['liczba']), step=1)
+        
+    with col_upd3:
+        st.write(" ") # wyrównanie
+        if st.button("Zaktualizuj ilość", use_container_width=True):
+            supabase.table("produkty").update({"liczba": new_quantity}).eq("id", selected_prod['id']).execute()
+            st.success("Zaktualizowano!")
+            st.rerun()
+
+    # --- PODSEKCJA: USUWANIE ---
+    st.subheader("🗑️ Usuwanie produktu")
+    col_del1, col_del2 = st.columns([3, 1])
+    
+    with col_del1:
         delete_map = {f"{p['nazwa']} (ID: {p['id']})": p['id'] for p in products_data}
-        to_delete = st.selectbox("Wybierz produkt do usunięcia", options=list(delete_map.keys()))
+        to_delete = st.selectbox("Wybierz produkt do usunięcia", options=list(delete_map.keys()), key="delete_select")
     
-    with col2:
-        st.write(" ") # Odstęp dla wyrównania
-        if st.button("Usuń", type="primary"):
+    with col_del2:
+        st.write(" ")
+        if st.button("USUŃ DEFINITYWNIE", type="primary", use_container_width=True):
             target_id = delete_map[to_delete]
             supabase.table("produkty").delete().eq("id", target_id).execute()
-            st.warning(f"Produkt usunięty!")
-            st.rerun() # Odświeżenie strony, by zaktualizować tabelę
+            st.warning("Produkt usunięty!")
+            st.rerun()
 
 else:
     st.info("Baza produktów jest pusta.")
